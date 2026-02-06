@@ -116,6 +116,27 @@ class THSRApp:
         self.range_entry.grid(row=8, column=1, sticky=tk.EW, pady=5)
         ttk.Label(form_frame, text="(留空則選擇最早班次)").grid(row=8, column=2, sticky=tk.W, padx=5)
 
+        # Retry Settings
+        ttk.Label(form_frame, text="搜尋循環次數:").grid(row=9, column=0, sticky=tk.W, pady=5)
+        self.retry_cycles_var = tk.StringVar(value="10")
+        self.retry_cycles_entry = ttk.Entry(form_frame, textvariable=self.retry_cycles_var)
+        self.retry_cycles_entry.grid(row=9, column=1, sticky=tk.EW, pady=5)
+
+        self.until_success_var = tk.BooleanVar(value=False)
+        def toggle_retry_entry():
+            if self.until_success_var.get():
+                self.retry_cycles_entry.config(state='disabled')
+            else:
+                self.retry_cycles_entry.config(state='normal')
+
+        self.until_success_cb = ttk.Checkbutton(
+            form_frame,
+            text="直到成功訂到為止",
+            variable=self.until_success_var,
+            command=toggle_retry_entry
+        )
+        self.until_success_cb.grid(row=9, column=2, sticky=tk.W, padx=5)
+
         # Test Mode Checkbox
         self.test_mode_var = tk.BooleanVar(value=True)  # Default: Test mode ON (won't submit)
         self.test_mode_cb = ttk.Checkbutton(
@@ -123,8 +144,8 @@ class THSRApp:
             text="測試模式 (不送出最終訂位)", 
             variable=self.test_mode_var
         )
-        self.test_mode_cb.grid(row=9, column=0, columnspan=2, sticky=tk.W, pady=10)
-        ttk.Label(form_frame, text="⚠️ 取消勾選將實際完成訂位！", foreground="red").grid(row=9, column=2, sticky=tk.W, padx=5)
+        self.test_mode_cb.grid(row=10, column=0, columnspan=2, sticky=tk.W, pady=10)
+        ttk.Label(form_frame, text="⚠️ 取消勾選將實際完成訂位！", foreground="red").grid(row=10, column=2, sticky=tk.W, padx=5)
 
         # Start Button
         button_frame = ttk.Frame(self.root)
@@ -171,6 +192,16 @@ class THSRApp:
         phone = self.phone_var.get()
         email = self.email_var.get()
         test_mode = self.test_mode_var.get()
+        until_success = self.until_success_var.get()
+
+        max_cycles = None
+        if not until_success:
+            try:
+                max_cycles = int(self.retry_cycles_var.get())
+                if max_cycles <= 0:
+                    max_cycles = 1
+            except Exception:
+                max_cycles = 10
         
         # Parse Time Ranges
         raw_ranges = self.time_ranges_var.get()
@@ -221,7 +252,11 @@ class THSRApp:
         else:
             print("🔴 正式模式：將送出最終訂位！")
         
-        threading.Thread(target=self.run_browser, args=(start, dest, date, time_str, qty, pid, phone, email, time_ranges, test_mode), daemon=True).start()
+        threading.Thread(
+            target=self.run_browser,
+            args=(start, dest, date, time_str, qty, pid, phone, email, time_ranges, test_mode, max_cycles, until_success),
+            daemon=True
+        ).start()
 
 
 
@@ -232,17 +267,22 @@ class THSRApp:
         self.stop_btn.config(state='disabled')
         self.start_btn.config(state='normal')
 
-    def run_browser(self, start, dest, date, time_str, qty, pid, phone, email, time_ranges, test_mode):
-        MAX_RETRY_CYCLES = 10  # Maximum number of search+select cycles
+    def run_browser(self, start, dest, date, time_str, qty, pid, phone, email, time_ranges, test_mode, max_cycles, until_success):
         retry_count = 0
         
         try:
             self.bot.start_browser()
 
-            while retry_count < MAX_RETRY_CYCLES:
+            while True:
+                if max_cycles is not None and retry_count >= max_cycles:
+                    break
+
                 retry_count += 1
                 print(f"\n{'='*50}")
-                print(f"搜尋循環 第 {retry_count}/{MAX_RETRY_CYCLES} 次")
+                if max_cycles is None:
+                    print(f"搜尋循環 第 {retry_count} 次 (直到成功)")
+                else:
+                    print(f"搜尋循環 第 {retry_count}/{max_cycles} 次")
                 print(f"{'='*50}")
                 
                 # Check stop event
@@ -267,8 +307,8 @@ class THSRApp:
                     # submit_search failed (probably stopped by user)
                     break
             
-            if retry_count >= MAX_RETRY_CYCLES:
-                print(f">> 已達最大重試次數 ({MAX_RETRY_CYCLES})，停止搜尋")
+            if max_cycles is not None and retry_count >= max_cycles:
+                print(f">> 已達最大重試次數 ({max_cycles})，停止搜尋")
                 
         except Exception as e:
             print(f"Browser error: {e}")
